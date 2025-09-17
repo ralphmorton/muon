@@ -4,6 +4,7 @@ const rt = @import("runtime.zig");
 pub const Runtime = rt.Runtime;
 pub const Externs = rt.Externs;
 pub const Extern = rt.Extern;
+pub const ExternError = rt.ExternError;
 pub const Value = rt.Value;
 
 test "double" {
