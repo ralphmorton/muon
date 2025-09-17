@@ -45,7 +45,10 @@ pub const Code = struct {
     }
 };
 
-fn parseLocals(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(Local) {
+fn parseLocals(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+) !std.ArrayList(Local) {
     const count = try reader.takeLeb128(u32);
 
     var lx = try std.ArrayList(Local).initCapacity(allocator, @as(usize, count));
@@ -64,7 +67,10 @@ fn parseLocals(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayL
     return lx;
 }
 
-fn parseInstructions(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(Instruction) {
+fn parseInstructions(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+) !std.ArrayList(Instruction) {
     var ix = std.ArrayList(Instruction).empty;
 
     while (true) {

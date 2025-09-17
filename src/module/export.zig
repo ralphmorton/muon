@@ -19,7 +19,10 @@ pub const Export = union(enum) {
         const index = try reader.takeLeb128(u32);
 
         return switch (kind) {
-            0x00 => Export{ .func = ExportedFunc{ .name = name, .index = @as(usize, index) } },
+            0x00 => Export{ .func = ExportedFunc{
+                .name = name,
+                .index = @as(usize, index),
+            } },
             else => unreachable,
         };
     }

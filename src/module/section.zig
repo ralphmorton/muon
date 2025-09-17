@@ -2,8 +2,17 @@ const std = @import("std");
 const Code = @import("code.zig").Code;
 const Export = @import("export.zig").Export;
 const FuncType = @import("type.zig").FuncType;
+const Import = @import("import.zig").Import;
 
-pub const Error = error{ InvalidHeader, UnknownSection, InvalidCodeSection, InvalidFunctionSection, InvalidTypeSection };
+pub const Error = error{
+    InvalidHeader,
+    UnknownSection,
+    InvalidCodeSection,
+    InvalidImportSection,
+    InvalidFunctionSection,
+    InvalidExportSection,
+    InvalidTypeSection,
+};
 
 pub const SectionHeader = enum(u8) {
     custom,
@@ -33,7 +42,7 @@ pub const SectionHeader = enum(u8) {
 pub const Section = union(SectionHeader) {
     custom,
     type: std.ArrayList(FuncType),
-    import,
+    import: std.ArrayList(Import),
     function: std.ArrayList(usize),
     memory,
     exports: std.ArrayList(Export),
@@ -60,6 +69,12 @@ pub const Section = union(SectionHeader) {
                 };
                 return Section{ .type = types };
             },
+            SectionHeader.import => {
+                const imports = parseArrayList(Import, allocator, reader) catch {
+                    return Error.InvalidImportSection;
+                };
+                return Section{ .import = imports };
+            },
             SectionHeader.function => {
                 const funcs = parseFunctionSection(allocator, reader) catch {
                     return Error.InvalidFunctionSection;
@@ -68,7 +83,7 @@ pub const Section = union(SectionHeader) {
             },
             SectionHeader.exports => {
                 const exports = parseArrayList(Export, allocator, reader) catch {
-                    return Error.InvalidCodeSection;
+                    return Error.InvalidExportSection;
                 };
                 return Section{ .exports = exports };
             },
@@ -83,7 +98,11 @@ pub const Section = union(SectionHeader) {
     }
 };
 
-fn parseArrayList(comptime T: type, allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(T) {
+fn parseArrayList(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+) !std.ArrayList(T) {
     const count = try reader.takeLeb128(u32);
     var types = try std.ArrayList(T).initCapacity(allocator, @as(usize, count));
 
@@ -96,7 +115,10 @@ fn parseArrayList(comptime T: type, allocator: std.mem.Allocator, reader: *std.I
     return types;
 }
 
-fn parseFunctionSection(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(usize) {
+fn parseFunctionSection(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+) !std.ArrayList(usize) {
     const count = try reader.takeLeb128(u32);
     var funcs = try std.ArrayList(usize).initCapacity(allocator, @as(usize, count));
 

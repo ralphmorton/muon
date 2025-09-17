@@ -39,7 +39,10 @@ pub const FuncType = struct {
     }
 };
 
-fn parseTypes(allocator: std.mem.Allocator, reader: *std.Io.Reader) !std.ArrayList(ValueType) {
+fn parseTypes(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+) !std.ArrayList(ValueType) {
     const num = try reader.takeLeb128(u32);
 
     var tx = try std.ArrayList(ValueType).initCapacity(allocator, @as(usize, num));
