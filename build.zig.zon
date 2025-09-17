@@ -1,0 +1,8 @@
+.{
+    .name = .muon,
+    .version = "0.1.0",
+    .fingerprint = 0xf25d614e0e07d808, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0-dev.197+1a5cf072a",
+    .dependencies = .{},
+    .paths = .{ "build.zig", "build.zig.zon", "src", "test" },
+}
