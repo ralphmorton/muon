@@ -24,9 +24,11 @@ test "double" {
 
     var runtime = try Runtime.init(
         arena.allocator(),
-        &std.StringHashMap(rt.Externs).init(allocator),
+        std.StringHashMap(rt.Externs).init(allocator),
         &reader,
     );
+
+    defer runtime.deinit();
 
     const res = try runtime.call("call_doubler", &[1]Value{Value{ .i32 = 2 }});
     try std.testing.expect(res != null);

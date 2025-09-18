@@ -65,11 +65,11 @@ pub const Runtime = struct {
     store: Store,
     stack: std.ArrayList(Value),
     frames: std.ArrayList(Frame),
-    externs: *const std.StringHashMap(Externs),
+    externs: std.StringHashMap(Externs),
 
     pub fn init(
         allocator: std.mem.Allocator,
-        externs: *const std.StringHashMap(Externs),
+        externs: std.StringHashMap(Externs),
         reader: *std.Io.Reader,
     ) !Runtime {
         const module = try Module.init(allocator, reader);
@@ -92,6 +92,13 @@ pub const Runtime = struct {
         self.stack.deinit(self.allocator);
         self.frames.deinit(self.allocator);
         self.store.deinit();
+
+        var ext_iter = self.externs.iterator();
+        while (ext_iter.next()) |ext| {
+            ext.value_ptr.deinit();
+        }
+
+        self.externs.deinit();
     }
 
     pub fn call(self: *Runtime, name: []const u8, args: []const Value) !?Value {
@@ -265,9 +272,11 @@ test "add" {
 
     var rt = try Runtime.init(
         arena.allocator(),
-        &std.StringHashMap(Externs).init(allocator),
+        std.StringHashMap(Externs).init(allocator),
         &reader,
     );
+
+    defer rt.deinit();
 
     const res = try rt.call("add", &args);
     try std.testing.expect(res != null);
@@ -292,7 +301,7 @@ test "function calling" {
 
     var rt = try Runtime.init(
         arena.allocator(),
-        &std.StringHashMap(Externs).init(allocator),
+        std.StringHashMap(Externs).init(allocator),
         &reader,
     );
 
@@ -318,18 +327,18 @@ test "import" {
     defer arena.deinit();
 
     var env = std.StringHashMap(Extern).init(allocator);
-    defer env.deinit();
     try env.put("add", &testAdd);
 
     var externs = std.StringHashMap(Externs).init(allocator);
-    defer externs.deinit();
     try externs.put("env", env);
 
     var rt = try Runtime.init(
         arena.allocator(),
-        &externs,
+        externs,
         &reader,
     );
+
+    defer rt.deinit();
 
     const res = try rt.call("call_add", &[1]Value{Value{ .i32 = 2 }});
     try std.testing.expect(res != null);
