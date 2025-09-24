@@ -2,19 +2,10 @@ const std = @import("std");
 const fun = @import("store.zig");
 const Instruction = @import("module/code.zig").Instruction;
 const Module = @import("module.zig").Module;
-const Store = @import("store.zig").Store;
+pub const Store = @import("store.zig").Store;
 const ValueType = @import("module/type.zig").ValueType;
 
-pub const Error = InitError || ExecError;
-
-pub const InitError = error{
-    MissingTypeSection,
-    MissingFunctionSection,
-    MissingExportSection,
-    MissingCodeSection,
-};
-
-pub const ExecError = error{
+pub const Error = error{
     MissingLocal,
     StackEmpty,
     FramesEmpty,
@@ -23,7 +14,12 @@ pub const ExecError = error{
     NoSuchFunction,
 };
 
-pub const ExternError = error{InvalidArgs};
+pub const ExternError = error{
+    InvalidArgs,
+    MissingMemory,
+    MemoryRead,
+    FileWrite,
+};
 
 const Frame = struct {
     pc: isize,
@@ -57,7 +53,7 @@ pub const Value = union(enum) {
 };
 
 pub const Externs = std.StringHashMap(Extern);
-pub const Extern = *const fn (*const std.ArrayList(Value)) ExternError!?Value;
+pub const Extern = *const fn (*Store, *const std.ArrayList(Value)) ExternError!?Value;
 
 pub const Runtime = struct {
     allocator: std.mem.Allocator,
@@ -104,8 +100,8 @@ pub const Runtime = struct {
     pub fn call(self: *Runtime, name: []const u8, args: []const Value) !?Value {
         const fix: ?usize = self.store.externs.get(name);
 
-        if (fix == null) return ExecError.NoSuchExport;
-        if (self.store.funcs.items.len <= fix.?) return ExecError.NoSuchFunction;
+        if (fix == null) return Error.NoSuchExport;
+        if (self.store.funcs.items.len <= fix.?) return Error.NoSuchFunction;
 
         for (args) |v| {
             try self.pushStack(v);
@@ -124,17 +120,15 @@ pub const Runtime = struct {
     fn invokeInternal(self: *Runtime, func: *const fun.InternFunc) !?Value {
         try self.pushFrame(func);
 
-        {
-            errdefer self.reset();
-            try self.exec();
+        errdefer self.reset();
+        try self.exec();
 
-            if (func.type.result.items.len > 0) {
-                const res = try self.popStack();
-                return res;
-            }
-
-            return null;
+        if (func.type.result.items.len > 0) {
+            const res = try self.popStack();
+            return res;
         }
+
+        return null;
     }
 
     fn invokeExternal(self: *Runtime, func: *const fun.ExternFunc) !?Value {
@@ -153,33 +147,8 @@ pub const Runtime = struct {
             lx.insertAssumeCapacity(0, v);
         }
 
-        const res = try ext.?(&lx);
+        const res = try ext.?(&self.store, &lx);
         return res;
-    }
-
-    fn pushFrame(self: *Runtime, func: *const fun.InternFunc) !void {
-        const lx_count = func.code.locals.items.len + func.type.params.items.len;
-        var lx = try std.ArrayList(Value).initCapacity(self.allocator, lx_count);
-
-        for (0..lx_count) |_| {
-            const v = try self.popStack();
-            lx.insertAssumeCapacity(0, v);
-        }
-
-        for (func.code.locals.items) |l| {
-            const v = Value.default(l.type);
-            try lx.appendNTimes(self.allocator, v, l.count);
-        }
-
-        const frame = Frame{
-            .pc = -1,
-            .sp = self.stack.items.len,
-            .ix = &func.code.instructions,
-            .ar = func.type.result.items.len,
-            .lx = lx,
-        };
-
-        try self.frames.append(self.allocator, frame);
     }
 
     fn reset(self: *Runtime) void {
@@ -199,8 +168,26 @@ pub const Runtime = struct {
             const i = frame.ix.items[@intCast(frame.pc)];
             switch (i) {
                 .local_get => |ix| {
-                    if (frame.lx.items.len <= ix) return ExecError.MissingLocal;
+                    if (frame.lx.items.len <= ix) return Error.MissingLocal;
                     try self.stack.append(self.allocator, frame.lx.items[ix]);
+                },
+                .local_set => |ix| {
+                    const v = try self.popStack();
+                    frame.lx.items[ix] = v;
+                },
+                .i32_store => |px| {
+                    const value = try self.popStack();
+                    const addr_val = try self.popStack();
+                    const addr: usize = @intCast(addr_val.i32);
+
+                    const at: usize = addr + @as(usize, px.@"1");
+
+                    var data = self.store.memories.items[0].data.items;
+                    const dest: *[4]u8 = @ptrCast(data[at..(at + 4)]);
+                    std.mem.writeInt(i32, dest, value.i32, std.builtin.Endian.little);
+                },
+                .i32_const => |v| {
+                    try self.pushStack(Value{ .i32 = v });
                 },
                 .i32_add => {
                     const right = try self.popStack();
@@ -209,7 +196,7 @@ pub const Runtime = struct {
                     try self.pushStack(Value{ .i32 = left.i32 + right.i32 });
                 },
                 .call => |ix| {
-                    if (self.store.funcs.items.len <= ix) return ExecError.NoSuchFunction;
+                    if (self.store.funcs.items.len <= ix) return Error.NoSuchFunction;
 
                     try switch (self.store.funcs.items[ix]) {
                         .int => |f| self.pushFrame(&f),
@@ -222,19 +209,44 @@ pub const Runtime = struct {
                     };
                 },
                 .end => {
-                    var f = try (self.frames.pop() orelse ExecError.FramesEmpty);
+                    var f = try (self.frames.pop() orelse Error.FramesEmpty);
                     try self.unwind(&f);
                 },
             }
         }
     }
 
-    inline fn popStack(self: *Runtime) !Value {
-        return self.stack.pop() orelse ExecError.StackEmpty;
-    }
-
     inline fn pushStack(self: *Runtime, v: Value) !void {
         try self.stack.append(self.allocator, v);
+    }
+
+    inline fn popStack(self: *Runtime) !Value {
+        return self.stack.pop() orelse Error.StackEmpty;
+    }
+
+    fn pushFrame(self: *Runtime, func: *const fun.InternFunc) !void {
+        const lx_count = func.code.locals.items.len + func.type.params.items.len;
+        var lx = try std.ArrayList(Value).initCapacity(self.allocator, lx_count);
+
+        for (0..func.type.params.items.len) |_| {
+            const v = try self.popStack();
+            lx.insertAssumeCapacity(0, v);
+        }
+
+        for (func.code.locals.items) |l| {
+            const v = Value.default(l.type);
+            try lx.appendNTimes(self.allocator, v, l.count);
+        }
+
+        const frame = Frame{
+            .pc = -1,
+            .sp = self.stack.items.len,
+            .ix = &func.code.instructions,
+            .ar = func.type.result.items.len,
+            .lx = lx,
+        };
+
+        try self.frames.append(self.allocator, frame);
     }
 
     fn unwind(self: *Runtime, frame: *Frame) !void {
@@ -346,7 +358,7 @@ test "import" {
     try std.testing.expect(res.?.asI32().? == 3);
 }
 
-fn testAdd(vx: *const std.ArrayList(Value)) ExternError!?Value {
+fn testAdd(_: *Store, vx: *const std.ArrayList(Value)) ExternError!?Value {
     if (vx.items.len != 1) return ExternError.InvalidArgs;
 
     const a = try switch (vx.items[0]) {
@@ -355,4 +367,72 @@ fn testAdd(vx: *const std.ArrayList(Value)) ExternError!?Value {
     };
 
     return Value{ .i32 = a + 1 };
+}
+
+test "local-set" {
+    var allocator = std.testing.allocator;
+
+    const binary = try std.fs.cwd().readFileAlloc(
+        "test/local-set.wasm",
+        allocator,
+        std.Io.Limit.unlimited,
+    );
+
+    var reader = std.Io.Reader.fixed(binary);
+    defer allocator.free(binary);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var env = std.StringHashMap(Extern).init(allocator);
+    try env.put("add", &testAdd);
+
+    var externs = std.StringHashMap(Externs).init(allocator);
+    try externs.put("env", env);
+
+    var rt = try Runtime.init(
+        arena.allocator(),
+        externs,
+        &reader,
+    );
+
+    defer rt.deinit();
+
+    const res = try rt.call("local_set", &[0]Value{});
+    try std.testing.expect(res != null);
+    try std.testing.expect(res.?.asI32() != null);
+    try std.testing.expect(res.?.asI32().? == 42);
+}
+
+test "data" {
+    var allocator = std.testing.allocator;
+
+    const binary = try std.fs.cwd().readFileAlloc(
+        "test/data.wasm",
+        allocator,
+        std.Io.Limit.unlimited,
+    );
+
+    var reader = std.Io.Reader.fixed(binary);
+    defer allocator.free(binary);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var env = std.StringHashMap(Extern).init(allocator);
+    try env.put("add", &testAdd);
+
+    var externs = std.StringHashMap(Externs).init(allocator);
+    try externs.put("env", env);
+
+    var rt = try Runtime.init(
+        arena.allocator(),
+        externs,
+        &reader,
+    );
+
+    defer rt.deinit();
+
+    const m = rt.store.memories.items[0];
+    try std.testing.expect(std.mem.eql(u8, m.data.items[0..5], "hello"));
 }

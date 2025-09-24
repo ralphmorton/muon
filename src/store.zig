@@ -3,11 +3,15 @@ const Code = @import("module/code.zig").Code;
 const Export = @import("module/export.zig").Export;
 const FuncType = @import("module/type.zig").FuncType;
 const Import = @import("module/import.zig").Import;
+const Memory = @import("module/memory.zig").Memory;
 const Module = @import("module.zig").Module;
+const Segment = @import("module/data.zig").Segment;
 
 pub const Error = error{
     NoSuchFuncType,
     NoSuchFunc,
+    NoSuchMemory,
+    MemoryAddressOutOfRange,
 };
 
 pub const Func = union(enum) {
@@ -26,18 +30,28 @@ pub const ExternFunc = struct {
     type: *FuncType,
 };
 
+const PAGE_SIZE: u32 = 65536;
+
+pub const MemoryStore = struct {
+    data: std.ArrayList(u8),
+    max: ?u32,
+};
+
 pub const Store = struct {
     allocator: std.mem.Allocator,
     mod: Module,
     funcs: std.ArrayList(Func),
+    memories: std.ArrayList(MemoryStore),
     externs: std.StringHashMap(usize),
 
     pub fn init(allocator: std.mem.Allocator, mod: Module) !Store {
         const tx = mod.types orelse std.ArrayList(FuncType).empty;
         const ix = mod.imports orelse std.ArrayList(Import).empty;
         const fx = mod.funcs orelse std.ArrayList(usize).empty;
+        const mx = mod.memory orelse std.ArrayList(Memory).empty;
         const ex = mod.exports orelse std.ArrayList(Export).empty;
         const cx = mod.codes orelse std.ArrayList(Code).empty;
+        const sx = mod.data orelse std.ArrayList(Segment).empty;
 
         var funcs = std.ArrayList(Func).empty;
 
@@ -73,6 +87,21 @@ pub const Store = struct {
             );
         }
 
+        var memories = std.ArrayList(MemoryStore).empty;
+
+        for (mx.items) |mem| {
+            var data = std.ArrayList(u8).empty;
+            try data.appendNTimes(allocator, 0, mem.min * PAGE_SIZE);
+
+            try memories.append(
+                allocator,
+                MemoryStore{
+                    .data = data,
+                    .max = mem.max,
+                },
+            );
+        }
+
         var externs = std.StringHashMap(usize).init(allocator);
 
         for (ex.items) |exp| {
@@ -81,16 +110,32 @@ pub const Store = struct {
             }
         }
 
+        for (sx.items) |seg| {
+            if (memories.items.len <= seg.memory) return Error.NoSuchMemory;
+
+            const memory = &memories.items[seg.memory];
+            if (memory.data.items.len < seg.offset + seg.init.len) return Error.MemoryAddressOutOfRange;
+
+            @memcpy(memory.data.items[seg.offset..(seg.offset + seg.init.len)], seg.init);
+        }
+
         return Store{
             .allocator = allocator,
             .mod = mod,
             .funcs = funcs,
+            .memories = memories,
             .externs = externs,
         };
     }
 
     pub fn deinit(self: *Store) void {
         self.funcs.deinit(self.allocator);
+
+        for (self.memories.items) |*mem| {
+            mem.data.deinit(self.allocator);
+        }
+        self.memories.deinit(self.allocator);
+
         self.externs.deinit();
     }
 };

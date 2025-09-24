@@ -3,6 +3,8 @@ const Code = @import("code.zig").Code;
 const Export = @import("export.zig").Export;
 const FuncType = @import("type.zig").FuncType;
 const Import = @import("import.zig").Import;
+const Memory = @import("memory.zig").Memory;
+const Segment = @import("data.zig").Segment;
 
 pub const Error = error{
     InvalidHeader,
@@ -44,10 +46,10 @@ pub const Section = union(SectionHeader) {
     type: std.ArrayList(FuncType),
     import: std.ArrayList(Import),
     function: std.ArrayList(usize),
-    memory,
+    memory: std.ArrayList(Memory),
     exports: std.ArrayList(Export),
     code: std.ArrayList(Code),
-    data,
+    data: std.ArrayList(Segment),
 
     pub fn parse(allocator: std.mem.Allocator, reader: *std.Io.Reader) Error!Section {
         const code = reader.takeInt(u8, std.builtin.Endian.little) catch {
@@ -81,6 +83,12 @@ pub const Section = union(SectionHeader) {
                 };
                 return Section{ .function = funcs };
             },
+            SectionHeader.memory => {
+                const memories = parseArrayList(Memory, allocator, reader) catch {
+                    return Error.InvalidExportSection;
+                };
+                return Section{ .memory = memories };
+            },
             SectionHeader.exports => {
                 const exports = parseArrayList(Export, allocator, reader) catch {
                     return Error.InvalidExportSection;
@@ -93,7 +101,12 @@ pub const Section = union(SectionHeader) {
                 };
                 return Section{ .code = codes };
             },
-            else => Error.UnknownSection,
+            SectionHeader.data => {
+                const segments = parseArrayList(Segment, allocator, reader) catch {
+                    return Error.InvalidCodeSection;
+                };
+                return Section{ .data = segments };
+            },
         };
     }
 };

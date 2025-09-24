@@ -3,7 +3,9 @@ const Code = @import("module/code.zig").Code;
 const Export = @import("module/export.zig").Export;
 const Import = @import("module/import.zig").Import;
 const FuncType = @import("module/type.zig").FuncType;
+const Memory = @import("module/memory.zig").Memory;
 const Section = @import("module/section.zig").Section;
+const Segment = @import("module/data.zig").Segment;
 
 pub const Error = error{ InvalidModuleHeader, ModuleParsingFailed };
 
@@ -12,8 +14,10 @@ pub const Module = struct {
     types: ?std.ArrayList(FuncType),
     imports: ?std.ArrayList(Import),
     funcs: ?std.ArrayList(usize),
+    memory: ?std.ArrayList(Memory),
     exports: ?std.ArrayList(Export),
     codes: ?std.ArrayList(Code),
+    data: ?std.ArrayList(Segment),
 
     pub fn init(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Module {
         const magic = try reader.takeArray(4);
@@ -27,8 +31,10 @@ pub const Module = struct {
         var types: ?std.ArrayList(FuncType) = null;
         var imports: ?std.ArrayList(Import) = null;
         var funcs: ?std.ArrayList(usize) = null;
+        var memory: ?std.ArrayList(Memory) = null;
         var exports: ?std.ArrayList(Export) = null;
         var codes: ?std.ArrayList(Code) = null;
+        var data: ?std.ArrayList(Segment) = null;
 
         while (reader.peekByte() != std.Io.Reader.Error.EndOfStream) {
             const section = try Section.parse(allocator, reader);
@@ -38,9 +44,10 @@ pub const Module = struct {
                 .type => |tx| types = tx,
                 .import => |ix| imports = ix,
                 .function => |fx| funcs = fx,
+                .memory => |mx| memory = mx,
                 .exports => |ex| exports = ex,
                 .code => |cx| codes = cx,
-                else => unreachable,
+                .data => |sx| data = sx,
             }
         }
 
@@ -49,8 +56,10 @@ pub const Module = struct {
             .types = types,
             .imports = imports,
             .funcs = funcs,
+            .memory = memory,
             .exports = exports,
             .codes = codes,
+            .data = data,
         };
     }
 };
@@ -376,4 +385,83 @@ test "call" {
     try std.testing.expect(c2.instructions.items[1].local_get == 0);
     try std.testing.expect(c2.instructions.items[2] == .i32_add);
     try std.testing.expect(c2.instructions.items[3] == .end);
+}
+
+test "i32-store" {
+    var allocator = std.testing.allocator;
+
+    const binary = try std.fs.cwd().readFileAlloc(
+        "test/i32-store.wasm",
+        allocator,
+        std.Io.Limit.unlimited,
+    );
+
+    var reader = std.Io.Reader.fixed(binary);
+    defer allocator.free(binary);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const module = try Module.init(arena.allocator(), &reader);
+
+    try std.testing.expect(module.version == 1);
+    try std.testing.expect(module.types.?.items.len == 1);
+    try std.testing.expect(module.funcs.?.items.len == 1);
+    try std.testing.expect(module.exports.?.items.len == 1);
+    try std.testing.expect(module.codes.?.items.len == 1);
+
+    const t = module.types.?.items[0];
+    try std.testing.expect(t.params.items.len == 1);
+    try std.testing.expect(t.params.items[0] == .i32);
+    try std.testing.expect(t.result.items.len == 0);
+
+    const f = module.funcs.?.items[0];
+    try std.testing.expect(f == 0);
+
+    const e = module.exports.?.items[0];
+    try std.testing.expect(std.mem.eql(u8, e.func.name, "store_in_mem"));
+    try std.testing.expect(e.func.index == 0);
+
+    const c = module.codes.?.items[0];
+    try std.testing.expect(c.locals.items.len == 0);
+    try std.testing.expect(c.instructions.items.len == 4);
+    try std.testing.expect(c.instructions.items[0] == .i32_const);
+    try std.testing.expect(c.instructions.items[0].i32_const == 0);
+    try std.testing.expect(c.instructions.items[1] == .local_get);
+    try std.testing.expect(c.instructions.items[1].local_get == 0);
+    try std.testing.expect(c.instructions.items[2] == .i32_store);
+    try std.testing.expect(c.instructions.items[2].i32_store.@"0" == 2);
+    try std.testing.expect(c.instructions.items[2].i32_store.@"1" == 0);
+    try std.testing.expect(c.instructions.items[3] == .end);
+}
+
+test "data" {
+    var allocator = std.testing.allocator;
+
+    const binary = try std.fs.cwd().readFileAlloc(
+        "test/data.wasm",
+        allocator,
+        std.Io.Limit.unlimited,
+    );
+
+    var reader = std.Io.Reader.fixed(binary);
+    defer allocator.free(binary);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const module = try Module.init(arena.allocator(), &reader);
+
+    try std.testing.expect(module.version == 1);
+    try std.testing.expect(module.memory.?.items.len == 1);
+    try std.testing.expect(module.data.?.items.len == 1);
+
+    const m = module.memory.?.items[0];
+    try std.testing.expect(m.min == 5);
+    try std.testing.expect(m.max == null);
+
+    const d = module.data.?.items[0];
+    try std.testing.expect(d.memory == 0);
+    try std.testing.expect(d.offset == 0);
+    try std.testing.expect(std.mem.eql(u8, d.init, "hello"));
 }

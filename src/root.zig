@@ -5,6 +5,7 @@ pub const Runtime = rt.Runtime;
 pub const Externs = rt.Externs;
 pub const Extern = rt.Extern;
 pub const ExternError = rt.ExternError;
+pub const Store = rt.Store;
 pub const Value = rt.Value;
 
 test "double" {

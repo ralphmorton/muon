@@ -5,6 +5,9 @@ pub const Error = error{ UnknownInstruction, InvalidCode };
 
 pub const Instruction = union(enum) {
     local_get: u32,
+    local_set: u32,
+    i32_store: struct { u32, u32 }, // align, offset
+    i32_const: i32,
     i32_add,
     call: u32,
     end,
@@ -14,6 +17,19 @@ pub const Instruction = union(enum) {
             0x20 => {
                 const ix = try reader.takeLeb128(u32);
                 return Instruction{ .local_get = ix };
+            },
+            0x21 => {
+                const ix = try reader.takeLeb128(u32);
+                return Instruction{ .local_set = ix };
+            },
+            0x36 => {
+                const aln = try reader.takeLeb128(u32);
+                const off = try reader.takeLeb128(u32);
+                return Instruction{ .i32_store = .{ aln, off } };
+            },
+            0x41 => {
+                const val = try reader.takeLeb128(i32);
+                return Instruction{ .i32_const = val };
             },
             0x6A => .i32_add,
             0x0B => .end,
